@@ -22,6 +22,17 @@ PROBLEM_KNOWLEDGE_BASE: Dict[str, Dict[str, List[str]]] = {
 }
 
 
+def format_problem_kb_for_prompt() -> str:
+    lines: List[str] = []
+    for key, data in PROBLEM_KNOWLEDGE_BASE.items():
+        desc = data.get("description", "")
+        litmus = data.get("litmus_question", "")
+        lines.append(f"— `{key}`: {desc}")
+        if litmus:
+            lines.append(f"  (ориентир-вопрос: {litmus})")
+    return "\n".join(lines) if lines else "(база пока пуста)"
+
+
 def find_problem_type(user_message: str) -> tuple[bool, str]:
     if not user_message:
         return False, ""
