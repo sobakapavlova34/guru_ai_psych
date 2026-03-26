@@ -42,6 +42,8 @@ def init_user_state() -> DialogState:
         "conversation_topic": "",
         "stage": "chat",
         "turn_count": 0,
+        "user_meta": {},
+        "scenario": "",
     }
 
 
@@ -64,7 +66,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         **state,
         "messages": result["messages"],
         "turn_count": result.get("turn_count", 1),
-        "stage": result.get("stage", "setting_up_a_contact"),
+        "stage": result.get("stage", "greeting"),
+        "user_meta": result.get("user_meta", {}),
+        "scenario": result.get("scenario", ""),
     }
 
     await update.effective_chat.send_message(text=greeting_text)
@@ -86,7 +90,9 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         **state,
         "messages": result["messages"],
         "turn_count": result.get("turn_count", 1),
-        "stage": result.get("stage", "setting_up_a_contact"),
+        "stage": result.get("stage", "greeting"),
+        "user_meta": result.get("user_meta", {}),
+        "scenario": result.get("scenario", ""),
     }
 
     await update.effective_chat.send_message(text="🔄 Диалог очищен.\n\n" + greeting_text)
@@ -136,6 +142,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "stage": result.get("stage", state.get("stage", "chat")),
             "turn_count": result.get("turn_count", state.get("turn_count", 0)),
             "tell_about_yourself_pending": result.get("tell_about_yourself_pending", 0),
+            "user_meta": result.get("user_meta", state.get("user_meta", {})),
+            "scenario": result.get("scenario", state.get("scenario", "")),
         },
     }
 
