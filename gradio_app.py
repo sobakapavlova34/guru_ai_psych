@@ -70,11 +70,23 @@ def format_flags_md(state: DialogState) -> str:
         else ""
     )
     rat_block = f"\n**Обоснование:** {rationale}\n" if rationale else ""
+    hyp_k = (meta.get("hypothesized_problem_key") or "").strip() if isinstance(meta, dict) else ""
+    hyp_q = (meta.get("hypothesis_litmus_question") or "").strip() if isinstance(meta, dict) else ""
+    hyp_rs = (meta.get("hypothesis_reason") or "").strip() if isinstance(meta, dict) else ""
+    hyp_block = ""
+    if hyp_k or hyp_q:
+        hyp_block = (
+            f"\n### Гипотеза проблемы (после шага 5)\n"
+            f"- **Ключ из базы:** `{hyp_k or '—'}`\n"
+            f"- **Уточняющий вопрос:** {hyp_q or '—'}\n"
+        )
+        if hyp_rs:
+            hyp_block += f"- **Как выбрано:** {hyp_rs}\n"
     return f"""### Состояние диалога
 - **Этап / stage:** `{st}`
 - **Сценарий (после шага 6):** `{sc}`
 - **turn_count:** `{tc}`
-- **Флаги intro финализированы:** `{'да' if finalized else 'нет'}`{pending}{rat_block}
+- **Флаги intro финализированы:** `{'да' if finalized else 'нет'}`{pending}{rat_block}{hyp_block}
 ### Флаги (итог по 5 вводным шагам)
 | Сигнал | Значение |
 |--------|----------|
@@ -87,22 +99,58 @@ def format_flags_md(state: DialogState) -> str:
 def format_insights_md(state: DialogState) -> str:
     meta = state.get("user_meta") or {}
     insights = meta.get("step_insights") if isinstance(meta, dict) else None
-    if not insights:
-        return "### Инсайты по шагам\n_Пока нет (после первых реплик появятся интерпретации LLM)._"
-    lines = ["### Инсайты по шагам (LLM)", ""]
-    for item in insights:
-        if not isinstance(item, dict):
-            continue
-        step = item.get("intro_step", "?")
-        interp = item.get("interpretation", "")
-        note = item.get("portrait_note", "")
-        lines.append(f"**Шаг {step}**")
-        if interp:
-            lines.append(f"- *Интерпретация:* {interp}")
-        if note:
-            lines.append(f"- *Портрет:* {note}")
-        lines.append("")
-    return "\n".join(lines)
+    kb_hits = meta.get("kb_trigger_hits") if isinstance(meta, dict) else None
+
+    parts: list[str] = []
+
+    if insights:
+        lines = ["### Инсайты по шагам (LLM)", ""]
+        for item in insights:
+            if not isinstance(item, dict):
+                continue
+            step = item.get("intro_step", "?")
+            interp = item.get("interpretation", "")
+            note = item.get("portrait_note", "")
+            lines.append(f"**Шаг {step}**")
+            if interp:
+                lines.append(f"- *Интерпретация:* {interp}")
+            if note:
+                lines.append(f"- *Портрет:* {note}")
+            lines.append("")
+        parts.append("\n".join(lines))
+    else:
+        parts.append(
+            "### Инсайты по шагам\n_Пока нет (после первых реплик появятся интерпретации LLM)._"
+        )
+
+    if kb_hits:
+        tw = ["### Совпадения с `trigger_words` (база, с intro_step ≥ 3)", ""]
+        for block in kb_hits:
+            if not isinstance(block, dict):
+                continue
+            step = block.get("intro_step", "?")
+            matches = block.get("matches") or []
+            tw.append(f"**Шаг {step}**")
+            if not matches:
+                tw.append("_Совпадений с фрагментами триггеров нет (реплика проверена)._")
+            for m in matches:
+                if not isinstance(m, dict):
+                    continue
+                pk = m.get("problem_type", "")
+                tr = m.get("trigger", "")
+                short = tr if len(tr) <= 120 else tr[:117] + "…"
+                tw.append(f"- `{pk}` ← «{short}»")
+            tw.append("")
+        parts.append("\n".join(tw))
+    elif insights:
+        parts.append(
+            "### Совпадения с `trigger_words`\n"
+            "_Проверка ещё не запускалась (триггеры ищутся с 3-го пользовательского шага ввода)._"
+        )
+
+    return "\n\n".join(parts) if parts else (
+        "### Инсайты по шагам\n_Пока нет._\n\n### trigger_words\n_С 3-го вводного шага._"
+    )
 
 
 def format_meta_json(state: DialogState) -> str:
