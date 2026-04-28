@@ -1,6 +1,7 @@
 import logging
+import traceback
 
-from typing import Dict
+from typing import Any, Dict
 
 from telegram import (
     Update,
@@ -25,9 +26,18 @@ from settings import settings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+DIALOG_GRAPH_KEY = "dialog_graph"
 
 # храним состояния диалога по пользователям
 user_states: Dict[int, DialogState] = {}
+
+
+def get_dialog_graph(context: ContextTypes.DEFAULT_TYPE) -> Any:
+    """Граф создаётся один раз и хранится в application.bot_data (нельзя добавлять новые атрибуты в Application)."""
+    bd = context.application.bot_data
+    if DIALOG_GRAPH_KEY not in bd:
+        bd[DIALOG_GRAPH_KEY] = create_dialog_graph()
+    return bd[DIALOG_GRAPH_KEY]
 
 
 def build_reset_keyboard() -> InlineKeyboardMarkup:
@@ -51,10 +61,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert update.effective_chat is not None
     chat_id = update.effective_chat.id
 
-    if not hasattr(context.application, "dialog_graph"):
-        context.application.dialog_graph = create_dialog_graph()
-
-    dialog_graph = context.application.dialog_graph
+    dialog_graph = get_dialog_graph(context)
     state = init_user_state()
 
     # приветствие из графа диалога
@@ -78,11 +85,8 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert update.effective_chat is not None
     chat_id = update.effective_chat.id
 
-    if not hasattr(context.application, "dialog_graph"):
-        context.application.dialog_graph = create_dialog_graph()
-
     state = init_user_state()
-    result = context.application.dialog_graph.invoke(state)
+    result = get_dialog_graph(context).invoke(state)
     last_message = result["messages"][-1]
     greeting_text = last_message.content if isinstance(last_message, AIMessage) else "Привет! Чем могу помочь?"
 
@@ -114,10 +118,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not text:
         return
 
-    if not hasattr(context.application, "dialog_graph"):
-        context.application.dialog_graph = create_dialog_graph()
-
-    dialog_graph = context.application.dialog_graph
+    dialog_graph = get_dialog_graph(context)
 
     state = user_states.get(chat_id)
     if state is None:
@@ -153,6 +154,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+async def telegram_error(_update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Сетевые таймауты к api.telegram.org и прочие ошибки — в лог, без сообщения «No error handlers»."""
+    err = context.error
+    if err is not None:
+        tb = getattr(err, "__traceback__", None)
+        lines = traceback.format_exception(type(err), err, tb)
+        logger.error("Ошибка в обработчике Telegram:\n%s", "".join(lines))
+
+
 def main() -> None:
     if not getattr(settings, "TELEGRAM_BOT_TOKEN", None):
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в .env")
@@ -160,8 +170,13 @@ def main() -> None:
     application = (
         ApplicationBuilder()
         .token(settings.TELEGRAM_BOT_TOKEN)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
         .build()
     )
+
+    application.add_error_handler(telegram_error)
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset))
