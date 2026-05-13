@@ -7,6 +7,7 @@ from typing import Any
 import gradio as gr
 from langchain_core.messages import AIMessage, HumanMessage
 
+from data_store import init_storage, seed_barriers
 from dialog import DialogState, _get_effective_count, create_dialog_graph, logger
 
 _graph = None
@@ -15,6 +16,8 @@ _graph = None
 def get_graph():
     global _graph
     if _graph is None:
+        init_storage()
+        seed_barriers()
         _graph = create_dialog_graph()
     return _graph
 
