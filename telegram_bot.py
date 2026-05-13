@@ -19,6 +19,13 @@ from telegram.ext import (
 
 from langchain_core.messages import HumanMessage, AIMessage
 
+from data_store import (
+    get_reaction_options,
+    init_storage,
+    seed_barriers,
+    save_bot_message,
+    save_reaction,
+)
 from dialog import create_dialog_graph, DialogState
 from settings import settings
 
@@ -44,6 +51,18 @@ def build_reset_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(text=" Начать заново", callback_data="reset_dialog")]
     ])
+
+
+def build_reply_keyboard() -> InlineKeyboardMarkup:
+    reaction_buttons = [
+        InlineKeyboardButton(text=row["label"], callback_data=f"react:{row['code']}")
+        for row in get_reaction_options()
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    if reaction_buttons:
+        rows.append(reaction_buttons)
+    rows.extend(build_reset_keyboard().inline_keyboard)
+    return InlineKeyboardMarkup(rows)
 
 
 def init_user_state() -> DialogState:
@@ -78,7 +97,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "scenario": result.get("scenario", ""),
     }
 
-    await update.effective_chat.send_message(text=greeting_text)
+    sent = await update.effective_chat.send_message(
+        text=greeting_text,
+        reply_markup=build_reply_keyboard(),
+    )
+    save_bot_message(
+        chat_id=chat_id,
+        user_id=update.effective_user.id if update.effective_user else None,
+        message_id=sent.message_id,
+        text=greeting_text,
+        stage=user_states[chat_id].get("stage", ""),
+        scenario=user_states[chat_id].get("scenario", ""),
+    )
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -99,7 +129,19 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "scenario": result.get("scenario", ""),
     }
 
-    await update.effective_chat.send_message(text="🔄 Диалог очищен.\n\n" + greeting_text)
+    text_out = "🔄 Диалог очищен.\n\n" + greeting_text
+    sent = await update.effective_chat.send_message(
+        text=text_out,
+        reply_markup=build_reply_keyboard(),
+    )
+    save_bot_message(
+        chat_id=chat_id,
+        user_id=update.effective_user.id if update.effective_user else None,
+        message_id=sent.message_id,
+        text=text_out,
+        stage=user_states[chat_id].get("stage", ""),
+        scenario=user_states[chat_id].get("scenario", ""),
+    )
 
 
 async def reset_dialog_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -108,6 +150,23 @@ async def reset_dialog_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer("Диалог очищен")
 
     await reset(update, context)
+
+
+async def reaction_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None or not query.data.startswith("react:"):
+        return
+    if query.message is None or query.from_user is None:
+        await query.answer("Не удалось сохранить")
+        return
+    reaction_code = query.data.split(":", 1)[1].strip()
+    ok = save_reaction(
+        chat_id=query.message.chat_id,
+        user_id=query.from_user.id,
+        message_id=query.message.message_id,
+        reaction_code=reaction_code,
+    )
+    await query.answer("Реакция сохранена" if ok else "Ошибка сохранения")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -148,9 +207,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         },
     }
 
-    await update.effective_chat.send_message(
+    sent = await update.effective_chat.send_message(
         reply_text,
-        reply_markup=build_reset_keyboard()
+        reply_markup=build_reply_keyboard(),
+    )
+    save_bot_message(
+        chat_id=chat_id,
+        user_id=update.effective_user.id if update.effective_user else None,
+        message_id=sent.message_id,
+        text=reply_text,
+        stage=user_states[chat_id].get("stage", ""),
+        scenario=user_states[chat_id].get("scenario", ""),
     )
 
 
@@ -166,6 +233,10 @@ async def telegram_error(_update: object, context: ContextTypes.DEFAULT_TYPE) ->
 def main() -> None:
     if not getattr(settings, "TELEGRAM_BOT_TOKEN", None):
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в .env")
+
+    init_storage()
+    loaded_rows = seed_barriers()
+    logger.info("barrier rows loaded: %s", loaded_rows)
 
     application = (
         ApplicationBuilder()
@@ -183,6 +254,9 @@ def main() -> None:
     application.add_handler(CommandHandler("clear", reset))  # альтернативная команда
     application.add_handler(
         CallbackQueryHandler(reset_dialog_callback, pattern=r"^reset_dialog$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(reaction_callback, pattern=r"^react:")
     )
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)

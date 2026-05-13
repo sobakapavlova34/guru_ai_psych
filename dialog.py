@@ -22,8 +22,10 @@ from knowledge_base import (
     get_problem_description,
     top_problem_keys_by_score,
 )
+from data_store import get_barrier_prompt_by_tool, get_barrier_tools
 from llm.bothub_client import bothub_client
 from prompts import load_prompt, render_prompt
+from settings import settings
 
 BASE_SYSTEM_PROMPT = load_prompt("base_system")
 STYLE_CONSTRAINTS_BLOCK = load_prompt("style_constraints")
@@ -114,6 +116,35 @@ def _work_modes_system_block(scenario: str) -> str:
     if scenario == "3":
         return load_prompt("work_mode_sc3")
     return load_prompt("work_mode_default")
+
+
+def _pick_barrier_prompt_by_function_call(
+    llm: Any,
+    messages: Sequence[BaseMessage],
+    scenario: str,
+) -> str:
+    tools = get_barrier_tools(limit=max(int(settings.BARRIER_TOOLS_LIMIT), 1))
+    if not tools:
+        return ""
+    chooser_system = (
+        "Выбери ровно одну функцию барьера, которая лучше всего подходит к текущему сообщению пользователя. "
+        f"Сценарий: {scenario}. "
+        "Если релевантности нет, не вызывай функцию."
+    )
+    short_context = list(messages)[-8:]
+    try:
+        chooser = llm.bind_tools(tools, tool_choice="auto")
+        decision = chooser.invoke([SystemMessage(content=chooser_system)] + short_context)
+        tool_calls = getattr(decision, "tool_calls", None) or []
+        if not tool_calls:
+            return ""
+        tool_name = str(tool_calls[0].get("name", "")).strip()
+        if not tool_name:
+            return ""
+        return get_barrier_prompt_by_tool(tool_name)
+    except Exception:
+        logger.exception("barrier function-calling failed")
+        return ""
 
 
 OFF_TOPIC_KEYWORDS = (
@@ -638,6 +669,7 @@ def create_dialog_graph(
         hypothesis_block = ""
         work_offer = ""
         meta_updates: dict[str, Any] = {}
+        barrier_prompt_block = ""
 
         if scenario_turn == 1:
             if catalog and not um.get("hypothesis_choice_offered"):
@@ -654,6 +686,17 @@ def create_dialog_graph(
             meta_updates["work_mode_offered"] = True
             meta_updates["hypothesis_choice_resolved"] = True
 
+        prompt_pick = _pick_barrier_prompt_by_function_call(
+            llm=llm,
+            messages=messages,
+            scenario=scenario,
+        )
+        if prompt_pick:
+            barrier_prompt_block = (
+                "\n\nСценарий проработки барьера из базы (выбран через function calling):\n"
+                + prompt_pick
+            )
+
         system_prompt = render_prompt(
             "scenario_system",
             base_system_prompt=BASE_SYSTEM_PROMPT,
@@ -665,6 +708,7 @@ def create_dialog_graph(
             um_json=json.dumps(um, ensure_ascii=False)[:2500],
             hypothesis_block=hypothesis_block,
             work_offer=work_offer,
+            barrier_prompt_block=barrier_prompt_block,
         )
 
         system_message = SystemMessage(content=system_prompt)

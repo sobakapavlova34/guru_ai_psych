@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     
     # Telegram bot
     TELEGRAM_BOT_TOKEN: str = ""
+    DATABASE_PATH: str = "bot_data.sqlite3"
+    BARRIER_TOOLS_LIMIT: int = 120
     
     model_config = SettingsConfigDict(
         env_file=".env",
